@@ -118,6 +118,14 @@
                 
                 <!-- 把各种功能按钮放在右侧 - 在小屏幕上各自占一行 -->
                 <div class="flex flex-wrap justify-end gap-2">
+                    <!-- 画质选择 -->
+                    <div id="qualityControl" class="items-center gap-1 flex-shrink-0" style="display: none;">
+                        <span class="text-gray-400 text-sm whitespace-nowrap">画质</span>
+                        <select id="qualitySelect" aria-label="选择画质" title="选择画质" class="h-8 max-w-[120px] bg-[#222] hover:bg-[#333] border border-[#333] text-white text-sm rounded-lg px-2 py-1 outline-none transition-colors">
+                            <option value="-1">自动</option>
+                        </select>
+                    </div>
+
                     <!-- 倒序排列按钮 -->
                     <button onclick="toggleEpisodeOrder()" class="px-3 py-1 bg-[#222] hover:bg-[#333] border border-[#333] rounded-lg transition-colors flex items-center space-x-1 flex-shrink-0">
                         <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" id="orderIcon" viewBox="0 0 20 20" fill="currentColor">

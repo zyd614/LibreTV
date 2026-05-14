@@ -1,3 +1,76 @@
+function splitPlaySourceList(value, keepEmpty = false) {
+    const items = String(value || '')
+        .split('$$$')
+        .map(item => item.trim());
+
+    return keepEmpty ? items : items.filter(Boolean);
+}
+
+function extractEpisodeUrls(playSource) {
+    return String(playSource || '')
+        .split('#')
+        .map(ep => {
+            const separatorIndex = ep.indexOf('$');
+            return (separatorIndex >= 0 ? ep.slice(separatorIndex + 1) : ep).trim();
+        })
+        .filter(url => url && (url.startsWith('http://') || url.startsWith('https://')));
+}
+
+function getExplicitQualityScore(text) {
+    const qualityRules = [
+        { pattern: /(?:2160p?|4k|uhd|超高清|蓝光|原盘|hdr|dolby|杜比)/i, score: 5000 },
+        { pattern: /(?:1080p?|fhd|超清)/i, score: 3000 },
+        { pattern: /(?:720p?|hd)/i, score: 2000 },
+        { pattern: /(?:480p?|标清|sd)/i, score: 1000 },
+    ];
+
+    const normalized = String(text || '');
+    return qualityRules.reduce((score, rule) => score + (rule.pattern.test(normalized) ? rule.score : 0), 0);
+}
+
+function pickBestPlaySource(videoDetail) {
+    const playSources = splitPlaySourceList(videoDetail.vod_play_url);
+    if (!playSources.length) {
+        return { episodes: [], sourceIndex: -1, sourceLabel: '' };
+    }
+
+    const playFroms = splitPlaySourceList(videoDetail.vod_play_from, true);
+    const playNotes = splitPlaySourceList(videoDetail.vod_play_note, true);
+    const fallbackEpisodes = extractEpisodeUrls(playSources[0]);
+
+    const rankedSources = playSources.map((playSource, index) => {
+        const sourceLabel = [playFroms[index], playNotes[index]]
+            .filter(Boolean)
+            .join(' ')
+            .trim();
+        const sourceText = `${sourceLabel} ${playSource}`;
+        const qualityScore = getExplicitQualityScore(sourceText);
+
+        return {
+            index,
+            sourceLabel,
+            episodes: extractEpisodeUrls(playSource),
+            qualityScore
+        };
+    }).filter(item => item.episodes.length > 0);
+
+    if (!rankedSources.length) {
+        return { episodes: fallbackEpisodes, sourceIndex: 0, sourceLabel: playFroms[0] || '' };
+    }
+
+    const bestSource = rankedSources
+        .filter(item => item.qualityScore > 0)
+        .sort((a, b) => b.qualityScore - a.qualityScore || a.index - b.index)[0];
+
+    const selectedSource = bestSource || rankedSources[0];
+
+    return {
+        episodes: selectedSource.episodes,
+        sourceIndex: selectedSource.index,
+        sourceLabel: selectedSource.sourceLabel
+    };
+}
+
 // 改进的API请求处理函数
 async function handleApiRequest(url) {
     const customApi = url.searchParams.get('customApi') || '';
@@ -145,26 +218,9 @@ async function handleApiRequest(url) {
                 // 获取第一个匹配的视频详情
                 const videoDetail = data.list[0];
                 
-                // 提取播放地址
-                let episodes = [];
-                
-                if (videoDetail.vod_play_url) {
-                    // 分割不同播放源
-                    const playSources = videoDetail.vod_play_url.split('$$$');
-                    
-                    // 提取第一个播放源的集数（通常为主要源）
-                    if (playSources.length > 0) {
-                        const mainSource = playSources[0];
-                        const episodeList = mainSource.split('#');
-                        
-                        // 从每个集数中提取URL
-                        episodes = episodeList.map(ep => {
-                            const parts = ep.split('$');
-                            // 返回URL部分(通常是第二部分，如果有的话)
-                            return parts.length > 1 ? parts[1] : '';
-                        }).filter(url => url && (url.startsWith('http://') || url.startsWith('https://')));
-                    }
-                }
+                // 提取播放地址，优先选择明确标注 4K / 2160P / UHD 的线路
+                const selectedPlaySource = pickBestPlaySource(videoDetail);
+                let episodes = selectedPlaySource.episodes;
                 
                 // 如果没有找到播放地址，尝试使用正则表达式查找m3u8链接
                 if (episodes.length === 0 && videoDetail.vod_content) {
@@ -186,6 +242,8 @@ async function handleApiRequest(url) {
                         director: videoDetail.vod_director,
                         actor: videoDetail.vod_actor,
                         remarks: videoDetail.vod_remarks,
+                        play_source_index: selectedPlaySource.sourceIndex,
+                        play_source_name: selectedPlaySource.sourceLabel,
                         // 添加源信息
                         source_name: sourceCode === 'custom' ? '自定义源' : API_SITES[sourceCode].name,
                         source_code: sourceCode

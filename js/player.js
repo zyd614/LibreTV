@@ -91,8 +91,198 @@ let shortcutHintTimeout = null; // 用于控制快捷键提示显示时间
 let adFilteringEnabled = true; // 默认开启广告过滤
 let progressSaveInterval = null; // 定期保存进度的计时器
 let currentVideoUrl = ''; // 记录当前实际的视频URL
+let currentQualityLevel = -1; // -1 表示 HLS 自动画质
+let currentQualityOptions = [];
+const preferredQualityStorage = 'preferredQualityHeight';
 const isWebkit = (typeof window.webkitConvertPointFromNodeToPage === 'function')
 Artplayer.FULLSCREEN_WEB_IN_BODY = true;
+
+function getQualityControlElements() {
+    return {
+        control: document.getElementById('qualityControl'),
+        select: document.getElementById('qualitySelect')
+    };
+}
+
+function resetQualitySelector() {
+    const { control, select } = getQualityControlElements();
+    currentQualityLevel = -1;
+    currentQualityOptions = [];
+
+    if (select) {
+        select.replaceChildren(new Option('自动', '-1'));
+        select.value = '-1';
+    }
+
+    if (control) {
+        control.style.display = 'none';
+    }
+}
+
+function getLevelHeight(level) {
+    return Number(level && level.height) || 0;
+}
+
+function getLevelBitrate(level) {
+    return Number(level && (level.bitrate || level.averageBitrate || level.maxBitrate)) || 0;
+}
+
+function formatBitrate(bitrate) {
+    if (!bitrate) return '';
+
+    if (bitrate >= 1000000) {
+        const mbps = bitrate / 1000000;
+        return `${mbps >= 10 ? Math.round(mbps) : mbps.toFixed(1)} Mbps`;
+    }
+
+    return `${Math.round(bitrate / 1000)} Kbps`;
+}
+
+function getBaseQualityLabel(level, index) {
+    const height = getLevelHeight(level);
+    if (height) return `${height}P`;
+
+    const width = Number(level && level.width) || 0;
+    if (width) return `${width}W`;
+
+    const bitrate = getLevelBitrate(level);
+    if (bitrate) return formatBitrate(bitrate);
+
+    return `线路 ${index + 1}`;
+}
+
+function buildQualityOptions(levels) {
+    const entries = levels.map((level, index) => ({
+        index,
+        height: getLevelHeight(level),
+        bitrate: getLevelBitrate(level),
+        baseLabel: getBaseQualityLabel(level, index)
+    }));
+
+    const labelCounts = entries.reduce((counts, entry) => {
+        counts[entry.baseLabel] = (counts[entry.baseLabel] || 0) + 1;
+        return counts;
+    }, {});
+
+    return entries
+        .map(entry => ({
+            ...entry,
+            label: labelCounts[entry.baseLabel] > 1
+                ? `${entry.baseLabel}${entry.bitrate ? ` (${formatBitrate(entry.bitrate)})` : ` #${entry.index + 1}`}`
+                : entry.baseLabel
+        }))
+        .sort((a, b) => (b.height - a.height) || (b.bitrate - a.bitrate) || (a.index - b.index));
+}
+
+function savePreferredQuality(hls, levelIndex) {
+    try {
+        if (levelIndex === -1) {
+            localStorage.setItem(preferredQualityStorage, 'auto');
+            return;
+        }
+
+        const level = hls && hls.levels && hls.levels[levelIndex];
+        const height = getLevelHeight(level);
+
+        if (height) {
+            localStorage.setItem(preferredQualityStorage, String(height));
+        } else {
+            localStorage.setItem(preferredQualityStorage, `level:${levelIndex}`);
+        }
+    } catch (e) {
+    }
+}
+
+function getPreferredQualityLevel(hls) {
+    const levels = (hls && hls.levels) || [];
+    let preference = 'auto';
+
+    try {
+        preference = localStorage.getItem(preferredQualityStorage) || 'auto';
+    } catch (e) {
+    }
+
+    if (preference === 'auto') {
+        return -1;
+    }
+
+    if (preference.startsWith('level:')) {
+        const savedIndex = Number.parseInt(preference.slice(6), 10);
+        return Number.isInteger(savedIndex) && levels[savedIndex] ? savedIndex : -1;
+    }
+
+    const preferredHeight = Number.parseInt(preference, 10);
+    if (!Number.isInteger(preferredHeight)) {
+        return -1;
+    }
+
+    const sortedLevels = levels
+        .map((level, index) => ({ index, height: getLevelHeight(level) }))
+        .filter(entry => entry.height > 0)
+        .sort((a, b) => b.height - a.height);
+
+    if (!sortedLevels.length) {
+        return -1;
+    }
+
+    const lowerOrEqual = sortedLevels.find(entry => entry.height <= preferredHeight);
+    return (lowerOrEqual || sortedLevels[sortedLevels.length - 1]).index;
+}
+
+function updateQualitySelectValue(levelIndex) {
+    const { select } = getQualityControlElements();
+    if (select) {
+        select.value = String(levelIndex);
+    }
+}
+
+function setHlsQualityLevel(hls, levelIndex, persist = true) {
+    if (!hls || hls !== currentHls) return;
+
+    const levels = hls.levels || [];
+    const numericLevel = Number.parseInt(levelIndex, 10);
+    const nextLevel = Number.isInteger(numericLevel) && numericLevel >= 0 && numericLevel < levels.length
+        ? numericLevel
+        : -1;
+
+    currentQualityLevel = nextLevel;
+    hls.currentLevel = nextLevel;
+    hls.nextLevel = nextLevel;
+    hls.loadLevel = nextLevel;
+    updateQualitySelectValue(nextLevel);
+
+    if (persist) {
+        savePreferredQuality(hls, nextLevel);
+    }
+}
+
+function handleQualityChange(event) {
+    setHlsQualityLevel(currentHls, event.target.value, true);
+}
+
+function updateQualitySelector(hls) {
+    if (!hls || hls !== currentHls) return;
+
+    const levels = hls.levels || [];
+    const { control, select } = getQualityControlElements();
+
+    if (!control || !select || levels.length < 2) {
+        resetQualitySelector();
+        return;
+    }
+
+    currentQualityOptions = buildQualityOptions(levels);
+    const options = [
+        new Option('自动', '-1'),
+        ...currentQualityOptions.map(option => new Option(option.label, String(option.index)))
+    ];
+
+    select.replaceChildren(...options);
+    select.onchange = handleQualityChange;
+    control.style.display = 'flex';
+
+    setHlsQualityLevel(hls, getPreferredQualityLevel(hls), false);
+}
 
 // 页面加载
 document.addEventListener('DOMContentLoaded', function () {
@@ -484,6 +674,7 @@ function initPlayer(videoUrl) {
                 // 创建新的HLS实例
                 const hls = new Hls(hlsConfig);
                 currentHls = hls;
+                resetQualitySelector();
 
                 // 跟踪是否已经显示错误
                 let errorDisplayed = false;
@@ -527,9 +718,18 @@ function initPlayer(videoUrl) {
                 video.disableRemotePlayback = false;
 
                 hls.on(Hls.Events.MANIFEST_PARSED, function () {
+                    updateQualitySelector(hls);
                     video.play().catch(e => {
                     });
                 });
+
+                if (Hls.Events.LEVEL_SWITCHED) {
+                    hls.on(Hls.Events.LEVEL_SWITCHED, function (event, data) {
+                        if (currentQualityLevel !== -1 && data && Number.isInteger(data.level)) {
+                            updateQualitySelectValue(data.level);
+                        }
+                    });
+                }
 
                 hls.on(Hls.Events.ERROR, function (event, data) {
                     // 增加错误计数
