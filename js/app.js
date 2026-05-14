@@ -1,5 +1,40 @@
 // 全局变量
-let selectedAPIs = JSON.parse(localStorage.getItem('selectedAPIs') || '["tyyszy","dyttzy", "bfzy", "ruyi"]'); // 默认选中资源
+const DEFAULT_SELECTED_API_VERSION = 'all-builtins-v1';
+const LEGACY_DEFAULT_SELECTED_APIS = ["tyyszy", "bfzy", "dyttzy", "ruyi"];
+
+function getDefaultSelectedAPIs() {
+    if (typeof API_SITES === 'undefined') {
+        return [...LEGACY_DEFAULT_SELECTED_APIS];
+    }
+
+    return Object.keys(API_SITES).filter(apiKey => !API_SITES[apiKey].adult);
+}
+
+function hasSameApiSet(left, right) {
+    if (!Array.isArray(left) || left.length !== right.length) {
+        return false;
+    }
+
+    const rightSet = new Set(right);
+    return left.every(apiId => rightSet.has(apiId));
+}
+
+function readSelectedAPIs() {
+    const storedValue = localStorage.getItem('selectedAPIs');
+    if (!storedValue) {
+        return getDefaultSelectedAPIs();
+    }
+
+    try {
+        const parsedValue = JSON.parse(storedValue);
+        return Array.isArray(parsedValue) ? parsedValue : getDefaultSelectedAPIs();
+    } catch (error) {
+        console.warn('Invalid selectedAPIs storage:', error);
+        return getDefaultSelectedAPIs();
+    }
+}
+
+let selectedAPIs = readSelectedAPIs(); // 默认选中资源
 let customAPIs = JSON.parse(localStorage.getItem('customAPIs') || '[]'); // 存储自定义API列表
 
 // 添加当前播放的集数索引
@@ -30,8 +65,35 @@ function escapeSearchHtmlAttribute(value) {
         .replace(/'/g, '&#39;');
 }
 
+function initializeDefaultSettings() {
+    const hasInitializedDefaults = localStorage.getItem('hasInitializedDefaults');
+    const defaultsVersion = localStorage.getItem('selectedApiDefaultsVersion');
+    const storedSelectedAPIs = localStorage.getItem('selectedAPIs');
+    let shouldUseAllBuiltInAPIs = !hasInitializedDefaults;
+
+    if (!shouldUseAllBuiltInAPIs && defaultsVersion !== DEFAULT_SELECTED_API_VERSION) {
+        shouldUseAllBuiltInAPIs = !storedSelectedAPIs || hasSameApiSet(selectedAPIs, LEGACY_DEFAULT_SELECTED_APIS);
+    }
+
+    if (shouldUseAllBuiltInAPIs) {
+        selectedAPIs = getDefaultSelectedAPIs();
+        localStorage.setItem('selectedAPIs', JSON.stringify(selectedAPIs));
+    }
+
+    if (!hasInitializedDefaults) {
+        localStorage.setItem('yellowFilterEnabled', 'true');
+        localStorage.setItem(PLAYER_CONFIG.adFilteringStorage, 'true');
+        localStorage.setItem('doubanEnabled', 'true');
+        localStorage.setItem('hasInitializedDefaults', 'true');
+    }
+
+    localStorage.setItem('selectedApiDefaultsVersion', DEFAULT_SELECTED_API_VERSION);
+}
+
 // 页面初始化
 document.addEventListener('DOMContentLoaded', function () {
+    initializeDefaultSettings();
+
     // 初始化API复选框
     initAPICheckboxes();
 
@@ -43,23 +105,6 @@ document.addEventListener('DOMContentLoaded', function () {
 
     // 渲染搜索历史
     renderSearchHistory();
-
-    // 设置默认API选择（如果是第一次加载）
-    if (!localStorage.getItem('hasInitializedDefaults')) {
-        // 默认选中资源
-        selectedAPIs = ["tyyszy", "bfzy", "dyttzy", "ruyi"];
-        localStorage.setItem('selectedAPIs', JSON.stringify(selectedAPIs));
-
-        // 默认选中过滤开关
-        localStorage.setItem('yellowFilterEnabled', 'true');
-        localStorage.setItem(PLAYER_CONFIG.adFilteringStorage, 'true');
-
-        // 默认启用豆瓣功能
-        localStorage.setItem('doubanEnabled', 'true');
-
-        // 标记已初始化默认值
-        localStorage.setItem('hasInitializedDefaults', 'true');
-    }
 
     // 设置黄色内容过滤器开关初始状态
     const yellowFilterToggle = document.getElementById('yellowFilterToggle');
