@@ -111,6 +111,37 @@ function clearAuthCache() {
     localStorage.removeItem('proxyAuthHash');
 }
 
+function getProxyBaseUrl() {
+    return typeof PROXY_URL !== 'undefined' ? PROXY_URL : '/proxy/';
+}
+
+async function proxifyUrl(targetUrl) {
+    if (!targetUrl || !/^https?:\/\//i.test(targetUrl)) {
+        return targetUrl;
+    }
+
+    const proxiedUrl = `${getProxyBaseUrl()}${encodeURIComponent(targetUrl)}`;
+    return await addAuthToProxyUrl(proxiedUrl);
+}
+
+async function loadProxiedImage(img, targetUrl) {
+    if (!img || !targetUrl || img.dataset.proxyTried === 'true') {
+        return;
+    }
+
+    img.dataset.proxyTried = 'true';
+
+    try {
+        const proxiedUrl = await proxifyUrl(targetUrl);
+        img.onerror = null;
+        img.classList.add('object-contain');
+        img.src = proxiedUrl;
+    } catch (error) {
+        console.error('Load proxied image failed:', error);
+        img.onerror = null;
+    }
+}
+
 // 监听密码变化，清除缓存
 window.addEventListener('storage', (e) => {
     if (e.key === 'userPassword' || (window.PASSWORD_CONFIG && e.key === window.PASSWORD_CONFIG.localStorageKey)) {
@@ -123,5 +154,9 @@ window.ProxyAuth = {
     addAuthToProxyUrl,
     validateProxyAuth,
     clearAuthCache,
-    getPasswordHash
+    getPasswordHash,
+    proxifyUrl,
+    loadProxiedImage
 };
+
+window.loadProxiedImage = loadProxiedImage;

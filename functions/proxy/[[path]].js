@@ -269,11 +269,17 @@ export async function onRequest(context) {
                  throw new Error(`HTTP error ${response.status}: ${response.statusText}. URL: ${targetUrl}. Body: ${errorBody.substring(0, 150)}`);
             }
 
+            const contentType = response.headers.get('Content-Type') || '';
+            if (isMediaFile(targetUrl, contentType)) {
+                const content = await response.arrayBuffer();
+                logDebug(`请求成功: ${targetUrl}, Content-Type: ${contentType}, 内容长度: ${content.byteLength}`);
+                return { content, contentType, responseHeaders: response.headers, isBinary: true };
+            }
+
             // 读取响应内容为文本
             const content = await response.text();
-            const contentType = response.headers.get('Content-Type') || '';
             logDebug(`请求成功: ${targetUrl}, Content-Type: ${contentType}, 内容长度: ${content.length}`);
-            return { content, contentType, responseHeaders: response.headers }; // 同时返回原始响应头
+            return { content, contentType, responseHeaders: response.headers, isBinary: false }; // 同时返回原始响应头
 
         } catch (error) {
              logDebug(`请求彻底失败: ${targetUrl}: ${error.message}`);
@@ -465,6 +471,12 @@ export async function onRequest(context) {
              // 为了简化，我们假设如果不是 M3U8，则流程中断或按原样处理
              // 或者，尝试将其作为媒体列表处理？（当前行为）
              // return createResponse(variantContent, 200, { 'Content-Type': variantContentType || 'application/octet-stream' });
+             if (typeof variantContent !== 'string') {
+                 return createResponse(variantContent, 200, {
+                     'Content-Type': variantContentType || 'application/octet-stream',
+                     'Cache-Control': `public, max-age=${CACHE_TTL}`
+                 });
+             }
              // 尝试按媒体列表处理，以防万一
              return processMediaPlaylist(bestVariantUrl, variantContent);
 
@@ -539,7 +551,16 @@ export async function onRequest(context) {
         }
 
         // --- 实际请求 ---
-        const { content, contentType, responseHeaders } = await fetchContentWithType(targetUrl);
+        const { content, contentType, responseHeaders, isBinary } = await fetchContentWithType(targetUrl);
+
+        if (isBinary) {
+            const finalHeaders = new Headers(responseHeaders);
+            finalHeaders.set('Cache-Control', `public, max-age=${CACHE_TTL}`);
+            finalHeaders.set("Access-Control-Allow-Origin", "*");
+            finalHeaders.set("Access-Control-Allow-Methods", "GET, HEAD, POST, OPTIONS");
+            finalHeaders.set("Access-Control-Allow-Headers", "*");
+            return new Response(content, { status: 200, headers: finalHeaders });
+        }
 
         // --- 写入缓存 (KV) ---
         if (kvNamespace) {
